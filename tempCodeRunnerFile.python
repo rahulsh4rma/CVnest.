@@ -1,0 +1,231 @@
+import sys
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                           QHBoxLayout, QPushButton, QLineEdit, QTabWidget)
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
+from PyQt5.QtCore import QUrl
+from PyQt5.QtGui import QIcon
+import json
+import os
+
+class WebBrowser(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PyQt5 Web Browser")
+        self.setGeometry(100, 100, 1200, 800)
+        
+        # Store closed tabs for restore functionality
+        self.closed_tabs = []
+        
+        # Store browsing history
+        self.history = []
+        self.history_file = "browser_history.json"
+        self.load_history()
+        
+        # Create central widget and layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        
+        # Create navigation bar
+        nav_bar = QWidget()
+        nav_layout = QHBoxLayout(nav_bar)
+        nav_layout.setSpacing(5)
+        
+        # Create navigation buttons
+        self.back_btn = QPushButton("←")
+        self.forward_btn = QPushButton("→")
+        self.reload_btn = QPushButton("⟳")
+        self.new_tab_btn = QPushButton("+")
+        self.restore_tab_btn = QPushButton("Restore Tab")
+        self.history_btn = QPushButton("History")
+        
+        # Create URL bar
+        self.url_bar = QLineEdit()
+        
+        # Add widgets to navigation layout
+        nav_layout.addWidget(self.back_btn)
+        nav_layout.addWidget(self.forward_btn)
+        nav_layout.addWidget(self.reload_btn)
+        nav_layout.addWidget(self.new_tab_btn)
+        nav_layout.addWidget(self.restore_tab_btn)
+        nav_layout.addWidget(self.history_btn)
+        nav_layout.addWidget(self.url_bar)
+        
+        # Remove margins to make the navigation bar more compact
+        nav_bar.setLayout(nav_layout)
+        nav_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Create tab widget
+        self.tabs = QTabWidget()
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabCloseRequested.connect(self.close_tab)
+        
+        # Add widgets to main layout
+        layout.addWidget(nav_bar)
+        layout.addWidget(self.tabs)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Connect signals
+        self.new_tab_btn.clicked.connect(lambda: self.add_new_tab())
+        self.url_bar.returnPressed.connect(self.navigate_to_url)
+        self.reload_btn.clicked.connect(self.reload_page)
+        self.back_btn.clicked.connect(self.navigate_back)
+        self.forward_btn.clicked.connect(self.navigate_forward)
+        self.restore_tab_btn.clicked.connect(self.restore_tab)
+        self.history_btn.clicked.connect(self.show_history)
+        
+        # Track current tab changes
+        self.tabs.currentChanged.connect(self.tab_changed)
+        
+        # Create first tab
+        self.add_new_tab()
+    
+    def create_new_tab(self, url="https://www.google.com"):
+        """Create a new QWebEngineView with the specified URL"""
+        browser = QWebEngineView()
+        browser.setUrl(QUrl(url))
+        
+        # Update URL bar when URL changes
+        browser.urlChanged.connect(lambda qurl, browser=browser: 
+            self.update_url_bar(qurl, browser))
+        
+        # Update history when URL changes
+        browser.urlChanged.connect(lambda qurl: 
+            self.update_history(qurl.toString()))
+        
+        return browser
+    
+    def add_new_tab(self, url="https://www.google.com"):
+        """Add a new browser tab"""
+        browser = self.create_new_tab(url)
+        index = self.tabs.addTab(browser, "Loading...")
+        
+        # Update tab title when the page title changes
+        browser.titleChanged.connect(lambda title, browser=browser: 
+            self.tabs.setTabText(self.tabs.indexOf(browser), title[:15] + "..." if len(title) > 15 else title))
+        
+        # Set the new tab as current
+        self.tabs.setCurrentIndex(index)
+        
+        return browser
+    
+    def close_tab(self, index):
+        """Close the tab and store it for potential restoration"""
+        if self.tabs.count() > 1:
+            widget = self.tabs.widget(index)
+            if widget is not None:
+                url = widget.url().toString()
+                if url != "about:blank":
+                    self.closed_tabs.append(url)
+                widget.deleteLater()
+            self.tabs.removeTab(index)
+    
+    def restore_tab(self):
+        """Restore the most recently closed tab"""
+        if self.closed_tabs:
+            url = self.closed_tabs.pop()
+            self.add_new_tab(url)
+    
+    def tab_changed(self, index):
+        """Handle tab change events"""
+        if index >= 0:
+            qurl = self.tabs.widget(index).url()
+            self.update_url_bar(qurl, self.tabs.widget(index))
+    
+    def navigate_to_url(self):
+        """Navigate to the URL in the URL bar"""
+        url = self.url_bar.text()
+        if not url.startswith(('http://', 'https://')):
+            url = 'http://' + url
+        
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.setUrl(QUrl(url))
+    
+    def reload_page(self):
+        """Reload the current page"""
+        current = self.tabs.currentWidget()
+        if current:
+            current.reload()
+    
+    def navigate_back(self):
+        """Navigate to the previous page"""
+        current = self.tabs.currentWidget()
+        if current:
+            current.back()
+    
+    def navigate_forward(self):
+        """Navigate to the next page"""
+        current = self.tabs.currentWidget()
+        if current:
+            current.forward()
+    
+    def update_url_bar(self, url, browser=None):
+        """Update the URL bar with the current URL"""
+        if browser != self.tabs.currentWidget():
+            return
+        self.url_bar.setText(url.toString())
+        self.url_bar.setCursorPosition(0)
+    
+    def update_history(self, url):
+        """Update browsing history"""
+        if url not in self.history and not url.startswith("about:"):
+            self.history.append(url)
+            self.save_history()
+    
+    def load_history(self):
+        """Load browsing history from file"""
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r') as f:
+                    self.history = json.load(f)
+        except Exception as e:
+            print(f"Error loading history: {e}")
+    
+    def save_history(self):
+        """Save browsing history to file"""
+        try:
+            with open(self.history_file, 'w') as f:
+                json.dump(self.history, f)
+        except Exception as e:
+            print(f"Error saving history: {e}")
+    
+    def show_history(self):
+        """Show browsing history in a new tab"""
+        history_html = """
+        <html>
+        <head>
+            <title>Browser History</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                h1 { color: #333; }
+                ul { list-style-type: none; padding: 0; }
+                li { margin: 10px 0; }
+                a { color: #0066cc; text-decoration: none; }
+                a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <h1>Browser History</h1>
+            <ul>
+        """
+        
+        for url in reversed(self.history):
+            history_html += f'<li><a href="{url}">{url}</a></li>'
+        
+        history_html += """
+            </ul>
+        </body>
+        </html>
+        """
+        
+        browser = self.create_new_tab()
+        browser.setHtml(history_html)
+        self.tabs.addTab(browser, "History")
+        self.tabs.setCurrentWidget(browser)
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = WebBrowser()
+    window.show()
+    sys.exit(app.exec_())
